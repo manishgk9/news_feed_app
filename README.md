@@ -151,7 +151,7 @@ lib/
 1. **Clone the repository**
 
 ```bash
-git clone <repo_url>
+git clone https://github.com/manishgk9/news_feed_app.git
 cd news_feed_app
 ```
 
