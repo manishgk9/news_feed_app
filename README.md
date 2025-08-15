@@ -2,36 +2,61 @@
 
 A modern Flutter news feed application with bookmarking, offline support, and rich UI features.
 
+
+
+## 📸 Screenshots & Demo
+
+<!-- Placeholder for screenshots -->
+
+
+
+<table>
+  <tr>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/onboard_2.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/onboard_3.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/feed_light.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/bookmark_light.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/feed_detail_light.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/search_light.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/share.png' height='250'></td>
+    
+  </tr>
+   <tr>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/onboard_1.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/feed_dark.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/feed2_dark.png' height='250'></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/bookmark_dark.png' height='250'></td>
+    <td><img alt="Screenshot_1755246129" src="https://github.com/user-attachments/assets/837006f6-fd64-42b9-b7dc-779eec6ba8e9" height='250' ></td>
+    <td><img  height="250" alt="Screenshot_1755246120" src="https://github.com/user-attachments/assets/ff7aa90c-53f5-4553-af43-60f7d7c2212a" ></td>
+    <td><img src='https://github.com/manishgk9/news_feed_app/blob/main/screen_shots/images/search_dark.png' height='250'></td>
+  </tr>
+ 
+
+</table>
+
+
+
+<!-- Placeholder for demo video -->
+
+
+https://github.com/user-attachments/assets/8c8687b6-9ca2-4936-8633-431615c6a3eb
+
+
+
+
 ---
 
 ## ✨ Features
 
 - 📰 **Latest News:** Fetch trending news from various sources.
 - 📑 **Bookmarks:** Save articles to read later with offline access.
+- 📑 **Pegination:** infine scrolling to fetch peginated data
 - 🔍 **Search:** Search for news articles by keyword.
 - 📡 **Offline Handling:** Detect network connectivity using `connectivity_plus`.
 - 📤 **Sharing:** Share news articles using `share_plus`.
 - 🎨 **Professional UI:** Smooth animations, shimmer loading, and modern design.
 - 🖋️ **Custom Fonts:** Integrated Google Fonts for a polished look.
 - 🌙 **Dark & Light Mode:** Adaptive themes for user comfort.
-
----
-
-## 📸 Screenshots & Demo
-
-> ⚠️ _Screenshots and video demo will be added soon._
-
-<!-- Placeholder for screenshots -->
-
-```
-[ Add screenshots here ]
-```
-
-<!-- Placeholder for demo video -->
-
-```
-[ Add video demo link here ]
-```
 
 ---
 
