@@ -19,7 +19,7 @@ class NewsController extends GetxController {
   var hasMore = true.obs;
   var error = ''.obs;
 
-  var query = 'trending'.obs;
+  var query = 'india'.obs;
   final CancelToken cancelToken = CancelToken();
   // search debounce
   Timer? _debounceTimer;
@@ -144,7 +144,7 @@ class NewsController extends GetxController {
   void onSearchChanged(String q) {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 600), () {
-      query.value = q.trim().isEmpty ? 'trending' : q.trim();
+      query.value = q.trim().isEmpty ? '' : q.trim();
       // save search history
       _cache.addSearchQuery(query.value);
       fetchInitial();

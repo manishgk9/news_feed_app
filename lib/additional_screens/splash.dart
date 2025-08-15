@@ -64,7 +64,12 @@ class _SplashScreenState extends State<SplashScreen> {
             Spacer(),
             const CircularProgressIndicator(color: Colors.white),
             SizedBox(height: 10),
-            Center(child: Text('Developed by Manish')),
+            Center(
+              child: Text(
+                'Developed by Manish',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
             SizedBox(height: 25),
           ],
         ),
