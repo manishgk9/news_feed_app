@@ -1,0 +1,1791 @@
+// pubspec.yaml
+name: news_feed_app
+description: A production-ready news feed mobile application
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  get: ^4.6.6
+  dio: ^5.4.0
+  get_storage: ^2.1.1
+  cached_network_image: ^3.3.1
+  shimmer: ^3.0.0
+  url_launcher: ^6.2.4
+  connectivity_plus: ^5.0.2
+  share_plus: ^7.2.2
+  flutter_staggered_animations: ^1.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  mockito: ^5.4.4
+  build_runner: ^2.4.7
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+
+---
+
+// lib/main.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
+import 'core/services/storage_service.dart';
+import 'core/services/network_service.dart';
+import 'core/theme/app_theme.dart';
+import 'core/constants/app_constants.dart';
+import 'presentation/routes/app_routes.dart';
+import 'presentation/routes/app_pages.dart';
+import 'core/bindings/initial_binding.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await GetStorage.init();
+  await initServices();
+  runApp(NewsApp());
+}
+
+Future<void> initServices() async {
+  await Get.putAsync(() => StorageService().init());
+  await Get.putAsync(() => NetworkService().init());
+}
+
+class NewsApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return GetMaterialApp(
+      title: AppConstants.appName,
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.system,
+      initialRoute: AppRoutes.HOME,
+      getPages: AppPages.pages,
+      initialBinding: InitialBinding(),
+    );
+  }
+}
+
+---
+
+// lib/core/constants/app_constants.dart
+class AppConstants {
+  static const String appName = 'News Feed';
+  static const String baseUrl = 'https://newsapi.org/v2';
+  static const String apiKey = 'YOUR_API_KEY'; // Replace with your NewsAPI key
+  static const int pageSize = 20;
+  static const Duration requestTimeout = Duration(seconds: 30);
+  static const Duration cacheExpiry = Duration(hours: 1);
+  
+  // Storage Keys
+  static const String cachedArticlesKey = 'cached_articles';
+  static const String lastCacheTimeKey = 'last_cache_time';
+  static const String searchHistoryKey = 'search_history';
+  static const String bookmarksKey = 'bookmarks';
+  static const String themeKey = 'theme_mode';
+}
+
+class AppStrings {
+  static const String noInternetConnection = 'No internet connection';
+  static const String somethingWentWrong = 'Something went wrong';
+  static const String noArticlesFound = 'No articles found';
+  static const String searchHint = 'Search news...';
+  static const String retry = 'Retry';
+  static const String pullToRefresh = 'Pull to refresh';
+  static const String loadingMore = 'Loading more...';
+}
+
+---
+
+// lib/core/theme/app_theme.dart
+import 'package:flutter/material.dart';
+
+class AppTheme {
+  static ThemeData get lightTheme {
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.blue,
+        brightness: Brightness.light,
+      ),
+      appBarTheme: const AppBarTheme(
+        elevation: 0,
+        centerTitle: true,
+      ),
+      cardTheme: CardTheme(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
+  }
+
+  static ThemeData get darkTheme {
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.blue,
+        brightness: Brightness.dark,
+      ),
+      appBarTheme: const AppBarTheme(
+        elevation: 0,
+        centerTitle: true,
+      ),
+      cardTheme: CardTheme(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
+  }
+}
+
+---
+
+// lib/core/services/storage_service.dart
+import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
+
+class StorageService extends GetxService {
+  late GetStorage _storage;
+
+  Future<StorageService> init() async {
+    _storage = GetStorage();
+    return this;
+  }
+
+  T? read<T>(String key) => _storage.read<T>(key);
+  
+  Future<void> write(String key, dynamic value) => _storage.write(key, value);
+  
+  Future<void> remove(String key) => _storage.remove(key);
+  
+  Future<void> clear() => _storage.erase();
+  
+  bool hasData(String key) => _storage.hasData(key);
+}
+
+---
+
+// lib/core/services/network_service.dart
+import 'package:dio/dio.dart';
+import 'package:get/get.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../constants/app_constants.dart';
+import '../exceptions/network_exception.dart';
+
+class NetworkService extends GetxService {
+  late Dio _dio;
+  final Connectivity _connectivity = Connectivity();
+
+  Future<NetworkService> init() async {
+    _dio = Dio(BaseOptions(
+      baseUrl: AppConstants.baseUrl,
+      connectTimeout: AppConstants.requestTimeout,
+      receiveTimeout: AppConstants.requestTimeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': AppConstants.apiKey,
+      },
+    ));
+
+    _dio.interceptors.add(LogInterceptor(
+      requestBody: true,
+      responseBody: true,
+      logPrint: (obj) => print(obj.toString()),
+    ));
+
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        if (!await isConnected()) {
+          throw NetworkException('No internet connection');
+        }
+        handler.next(options);
+      },
+      onError: (error, handler) {
+        final networkError = _handleDioError(error);
+        handler.reject(DioException(
+          requestOptions: error.requestOptions,
+          error: networkError,
+        ));
+      },
+    ));
+
+    return this;
+  }
+
+  Future<bool> isConnected() async {
+    final connectivityResult = await _connectivity.checkConnectivity();
+    return connectivityResult != ConnectivityResult.none;
+  }
+
+  Future<Response> get(String path, {Map<String, dynamic>? queryParameters}) {
+    return _dio.get(path, queryParameters: queryParameters);
+  }
+
+  NetworkException _handleDioError(DioException error) {
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.receiveTimeout:
+        return NetworkException('Connection timeout');
+      case DioExceptionType.badResponse:
+        return NetworkException('Server error: ${error.response?.statusCode}');
+      case DioExceptionType.cancel:
+        return NetworkException('Request cancelled');
+      default:
+        return NetworkException('Network error occurred');
+    }
+  }
+}
+
+---
+
+// lib/core/exceptions/network_exception.dart
+class NetworkException implements Exception {
+  final String message;
+  
+  NetworkException(this.message);
+  
+  @override
+  String toString() => message;
+}
+
+---
+
+// lib/data/models/article_model.dart
+class Article {
+  final String? title;
+  final String? description;
+  final String? url;
+  final String? urlToImage;
+  final DateTime? publishedAt;
+  final Source? source;
+  final String? content;
+
+  Article({
+    this.title,
+    this.description,
+    this.url,
+    this.urlToImage,
+    this.publishedAt,
+    this.source,
+    this.content,
+  });
+
+  factory Article.fromJson(Map<String, dynamic> json) {
+    return Article(
+      title: json['title'],
+      description: json['description'],
+      url: json['url'],
+      urlToImage: json['urlToImage'],
+      publishedAt: json['publishedAt'] != null 
+          ? DateTime.parse(json['publishedAt'])
+          : null,
+      source: json['source'] != null ? Source.fromJson(json['source']) : null,
+      content: json['content'],
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'title': title,
+      'description': description,
+      'url': url,
+      'urlToImage': urlToImage,
+      'publishedAt': publishedAt?.toIso8601String(),
+      'source': source?.toJson(),
+      'content': content,
+    };
+  }
+
+  Article copyWith({
+    String? title,
+    String? description,
+    String? url,
+    String? urlToImage,
+    DateTime? publishedAt,
+    Source? source,
+    String? content,
+  }) {
+    return Article(
+      title: title ?? this.title,
+      description: description ?? this.description,
+      url: url ?? this.url,
+      urlToImage: urlToImage ?? this.urlToImage,
+      publishedAt: publishedAt ?? this.publishedAt,
+      source: source ?? this.source,
+      content: content ?? this.content,
+    );
+  }
+}
+
+class Source {
+  final String? id;
+  final String? name;
+
+  Source({this.id, this.name});
+
+  factory Source.fromJson(Map<String, dynamic> json) {
+    return Source(
+      id: json['id'],
+      name: json['name'],
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+    };
+  }
+}
+
+---
+
+// lib/data/models/news_response_model.dart
+import 'article_model.dart';
+
+class NewsResponse {
+  final String status;
+  final int totalResults;
+  final List<Article> articles;
+
+  NewsResponse({
+    required this.status,
+    required this.totalResults,
+    required this.articles,
+  });
+
+  factory NewsResponse.fromJson(Map<String, dynamic> json) {
+    return NewsResponse(
+      status: json['status'] ?? '',
+      totalResults: json['totalResults'] ?? 0,
+      articles: (json['articles'] as List<dynamic>?)
+          ?.map((article) => Article.fromJson(article))
+          .toList() ?? [],
+    );
+  }
+}
+
+---
+
+// lib/data/repositories/news_repository.dart
+import 'package:get/get.dart';
+import '../models/article_model.dart';
+import '../models/news_response_model.dart';
+import '../../core/services/network_service.dart';
+import '../../core/services/storage_service.dart';
+import '../../core/constants/app_constants.dart';
+import '../../core/exceptions/network_exception.dart';
+
+class NewsRepository {
+  final NetworkService _networkService = Get.find();
+  final StorageService _storageService = Get.find();
+
+  Future<List<Article>> getArticles({
+    String query = 'flutter',
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    try {
+      final response = await _networkService.get('/everything', queryParameters: {
+        'q': query,
+        'sortBy': 'publishedAt',
+        'pageSize': pageSize,
+        'page': page,
+      });
+
+      final newsResponse = NewsResponse.fromJson(response.data);
+      
+      // Cache first page results
+      if (page == 1) {
+        await _cacheArticles(newsResponse.articles);
+      }
+      
+      return newsResponse.articles;
+    } catch (e) {
+      if (page == 1) {
+        // Return cached articles if available
+        return await _getCachedArticles();
+      }
+      throw NetworkException('Failed to fetch articles');
+    }
+  }
+
+  Future<void> _cacheArticles(List<Article> articles) async {
+    final articlesJson = articles.map((article) => article.toJson()).toList();
+    await _storageService.write(AppConstants.cachedArticlesKey, articlesJson);
+    await _storageService.write(AppConstants.lastCacheTimeKey, DateTime.now().millisecondsSinceEpoch);
+  }
+
+  Future<List<Article>> _getCachedArticles() async {
+    try {
+      final cachedData = _storageService.read<List<dynamic>>(AppConstants.cachedArticlesKey);
+      if (cachedData != null) {
+        return cachedData.map((json) => Article.fromJson(json)).toList();
+      }
+    } catch (e) {
+      print('Error reading cached articles: $e');
+    }
+    return [];
+  }
+
+  Future<bool> isCacheValid() async {
+    final lastCacheTime = _storageService.read<int>(AppConstants.lastCacheTimeKey);
+    if (lastCacheTime == null) return false;
+    
+    final cacheTime = DateTime.fromMillisecondsSinceEpoch(lastCacheTime);
+    return DateTime.now().difference(cacheTime) < AppConstants.cacheExpiry;
+  }
+}
+
+---
+
+// lib/presentation/controllers/news_controller.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import '../../data/models/article_model.dart';
+import '../../data/repositories/news_repository.dart';
+import '../../core/services/storage_service.dart';
+import '../../core/constants/app_constants.dart';
+
+class NewsController extends GetxController {
+  final NewsRepository _repository = NewsRepository();
+  final StorageService _storageService = Get.find();
+  
+  final RxList<Article> articles = <Article>[].obs;
+  final RxList<Article> filteredArticles = <Article>[].obs;
+  final RxBool isLoading = false.obs;
+  final RxBool isLoadingMore = false.obs;
+  final RxBool hasError = false.obs;
+  final RxString errorMessage = ''.obs;
+  final RxString searchQuery = ''.obs;
+  final RxList<String> searchHistory = <String>[].obs;
+  final RxList<Article> bookmarkedArticles = <Article>[].obs;
+  
+  final ScrollController scrollController = ScrollController();
+  final TextEditingController searchController = TextEditingController();
+  
+  int _currentPage = 1;
+  bool _hasMoreData = true;
+
+  @override
+  void onInit() {
+    super.onInit();
+    _setupScrollController();
+    _loadSearchHistory();
+    _loadBookmarks();
+    loadArticles();
+  }
+
+  @override
+  void onClose() {
+    scrollController.dispose();
+    searchController.dispose();
+    super.onClose();
+  }
+
+  void _setupScrollController() {
+    scrollController.addListener(() {
+      if (scrollController.position.pixels >= 
+          scrollController.position.maxScrollExtent - 200) {
+        if (!isLoadingMore.value && _hasMoreData) {
+          loadMoreArticles();
+        }
+      }
+    });
+  }
+
+  Future<void> loadArticles({bool refresh = false}) async {
+    if (refresh) {
+      _currentPage = 1;
+      _hasMoreData = true;
+      articles.clear();
+    }
+    
+    isLoading.value = true;
+    hasError.value = false;
+    
+    try {
+      final newArticles = await _repository.getArticles(
+        query: searchQuery.value.isEmpty ? 'flutter' : searchQuery.value,
+        page: _currentPage,
+      );
+      
+      if (refresh) {
+        articles.assignAll(newArticles);
+      } else {
+        articles.addAll(newArticles);
+      }
+      
+      _applyFilters();
+      _hasMoreData = newArticles.length == AppConstants.pageSize;
+      
+    } catch (e) {
+      hasError.value = true;
+      errorMessage.value = e.toString();
+      
+      // Load cached articles if available
+      if (_currentPage == 1) {
+        final cachedArticles = await _repository._getCachedArticles();
+        if (cachedArticles.isNotEmpty) {
+          articles.assignAll(cachedArticles);
+          _applyFilters();
+          hasError.value = false;
+        }
+      }
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  Future<void> loadMoreArticles() async {
+    if (isLoadingMore.value || !_hasMoreData) return;
+    
+    isLoadingMore.value = true;
+    _currentPage++;
+    
+    try {
+      final newArticles = await _repository.getArticles(
+        query: searchQuery.value.isEmpty ? 'flutter' : searchQuery.value,
+        page: _currentPage,
+      );
+      
+      articles.addAll(newArticles);
+      _applyFilters();
+      _hasMoreData = newArticles.length == AppConstants.pageSize;
+      
+    } catch (e) {
+      _currentPage--; // Rollback page increment
+      Get.snackbar('Error', 'Failed to load more articles');
+    } finally {
+      isLoadingMore.value = false;
+    }
+  }
+
+  void searchArticles(String query) {
+    searchQuery.value = query.trim();
+    if (query.isNotEmpty) {
+      _addToSearchHistory(query);
+    }
+    _currentPage = 1;
+    loadArticles(refresh: true);
+  }
+
+  void clearSearch() {
+    searchController.clear();
+    searchQuery.value = '';
+    _currentPage = 1;
+    loadArticles(refresh: true);
+  }
+
+  void _applyFilters() {
+    filteredArticles.assignAll(articles);
+  }
+
+  void _addToSearchHistory(String query) {
+    if (!searchHistory.contains(query)) {
+      searchHistory.insert(0, query);
+      if (searchHistory.length > 10) {
+        searchHistory.removeLast();
+      }
+      _saveSearchHistory();
+    }
+  }
+
+  void _loadSearchHistory() {
+    final history = _storageService.read<List<dynamic>>(AppConstants.searchHistoryKey);
+    if (history != null) {
+      searchHistory.assignAll(history.cast<String>());
+    }
+  }
+
+  void _saveSearchHistory() {
+    _storageService.write(AppConstants.searchHistoryKey, searchHistory.toList());
+  }
+
+  void clearSearchHistory() {
+    searchHistory.clear();
+    _storageService.remove(AppConstants.searchHistoryKey);
+  }
+
+  void toggleBookmark(Article article) {
+    if (isBookmarked(article)) {
+      bookmarkedArticles.removeWhere((a) => a.url == article.url);
+    } else {
+      bookmarkedArticles.add(article);
+    }
+    _saveBookmarks();
+  }
+
+  bool isBookmarked(Article article) {
+    return bookmarkedArticles.any((a) => a.url == article.url);
+  }
+
+  void _loadBookmarks() {
+    final bookmarks = _storageService.read<List<dynamic>>(AppConstants.bookmarksKey);
+    if (bookmarks != null) {
+      bookmarkedArticles.assignAll(
+        bookmarks.map((json) => Article.fromJson(json)).toList()
+      );
+    }
+  }
+
+  void _saveBookmarks() {
+    final bookmarksJson = bookmarkedArticles.map((a) => a.toJson()).toList();
+    _storageService.write(AppConstants.bookmarksKey, bookmarksJson);
+  }
+
+  Future<void> refreshArticles() async {
+    await loadArticles(refresh: true);
+  }
+}
+
+---
+
+// lib/presentation/routes/app_routes.dart
+abstract class AppRoutes {
+  static const HOME = '/home';
+  static const ARTICLE_DETAIL = '/article-detail';
+  static const SEARCH = '/search';
+  static const BOOKMARKS = '/bookmarks';
+}
+
+---
+
+// lib/presentation/routes/app_pages.dart
+import 'package:get/get.dart';
+import '../pages/home/home_page.dart';
+import '../pages/home/home_binding.dart';
+import '../pages/article_detail/article_detail_page.dart';
+import '../pages/search/search_page.dart';
+import '../pages/bookmarks/bookmarks_page.dart';
+import 'app_routes.dart';
+
+class AppPages {
+  static final pages = [
+    GetPage(
+      name: AppRoutes.HOME,
+      page: () => HomePage(),
+      binding: HomeBinding(),
+    ),
+    GetPage(
+      name: AppRoutes.ARTICLE_DETAIL,
+      page: () => ArticleDetailPage(),
+    ),
+    GetPage(
+      name: AppRoutes.SEARCH,
+      page: () => SearchPage(),
+    ),
+    GetPage(
+      name: AppRoutes.BOOKMARKS,
+      page: () => BookmarksPage(),
+    ),
+  ];
+}
+
+---
+
+// lib/presentation/pages/home/home_binding.dart
+import 'package:get/get.dart';
+import '../../controllers/news_controller.dart';
+
+class HomeBinding extends Bindings {
+  @override
+  void dependencies() {
+    Get.lazyPut(() => NewsController());
+  }
+}
+
+---
+
+// lib/presentation/pages/home/home_page.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
+import '../../controllers/news_controller.dart';
+import '../../widgets/article_card.dart';
+import '../../widgets/search_bar_widget.dart';
+import '../../widgets/loading_shimmer.dart';
+import '../../widgets/empty_state_widget.dart';
+import '../../widgets/error_widget.dart' as custom;
+import '../../routes/app_routes.dart';
+
+class HomePage extends GetView<NewsController> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('News Feed'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () => Get.toNamed(AppRoutes.SEARCH),
+          ),
+          IconButton(
+            icon: const Icon(Icons.bookmark),
+            onPressed: () => Get.toNamed(AppRoutes.BOOKMARKS),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          SearchBarWidget(),
+          Expanded(
+            child: Obx(() => _buildContent()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (controller.isLoading.value && controller.articles.isEmpty) {
+      return LoadingShimmer();
+    }
+    
+    if (controller.hasError.value && controller.articles.isEmpty) {
+      return custom.ErrorWidget(
+        message: controller.errorMessage.value,
+        onRetry: () => controller.loadArticles(refresh: true),
+      );
+    }
+    
+    if (controller.filteredArticles.isEmpty) {
+      return EmptyStateWidget(
+        message: 'No articles found',
+        onRefresh: () => controller.loadArticles(refresh: true),
+      );
+    }
+    
+    return RefreshIndicator(
+      onRefresh: controller.refreshArticles,
+      child: AnimationLimiter(
+        child: ListView.builder(
+          controller: controller.scrollController,
+          itemCount: controller.filteredArticles.length + 
+                     (controller.isLoadingMore.value ? 1 : 0),
+          itemBuilder: (context, index) {
+            if (index == controller.filteredArticles.length) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: CircularProgressIndicator(),
+                ),
+              );
+            }
+            
+            return AnimationConfiguration.staggeredList(
+              position: index,
+              duration: const Duration(milliseconds: 375),
+              child: SlideAnimation(
+                verticalOffset: 50,
+                child: FadeInAnimation(
+                  child: ArticleCard(
+                    article: controller.filteredArticles[index],
+                    onTap: () => Get.toNamed(
+                      AppRoutes.ARTICLE_DETAIL,
+                      arguments: controller.filteredArticles[index],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+---
+
+// lib/presentation/widgets/article_card.dart
+import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:get/get.dart';
+import '../../data/models/article_model.dart';
+import '../controllers/news_controller.dart';
+import 'package:timeago/timeago.dart' as timeago;
+
+class ArticleCard extends StatelessWidget {
+  final Article article;
+  final VoidCallback onTap;
+
+  const ArticleCard({
+    Key? key,
+    required this.article,
+    required this.onTap,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final newsController = Get.find<NewsController>();
+    
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (article.urlToImage != null && article.urlToImage!.isNotEmpty)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: CachedNetworkImage(
+                    imageUrl: article.urlToImage!,
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    placeholder: (context, url) => Container(
+                      height: 200,
+                      color: Colors.grey[300],
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                    errorWidget: (context, url, error) => Container(
+                      height: 200,
+                      color: Colors.grey[300],
+                      child: const Icon(Icons.error),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              Text(
+                article.title ?? 'No Title',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              if (article.description != null)
+                Text(
+                  article.description!,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Colors.grey[600],
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    height: 200,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    height: 20,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    height: 16,
+                    width: MediaQuery.of(context).size.width * 0.7,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Container(
+                    height: 16,
+                    width: MediaQuery.of(context).size.width * 0.5,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        height: 14,
+                        width: 100,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      Container(
+                        height: 24,
+                        width: 24,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+---
+
+// lib/presentation/widgets/empty_state_widget.dart
+import 'package:flutter/material.dart';
+
+class EmptyStateWidget extends StatelessWidget {
+  final String message;
+  final VoidCallback? onRefresh;
+
+  const EmptyStateWidget({
+    Key? key,
+    required this.message,
+    this.onRefresh,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.article_outlined,
+            size: 64,
+            color: Colors.grey[400],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            message,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: Colors.grey[600],
+            ),
+          ),
+          if (onRefresh != null) ...[
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: onRefresh,
+              child: const Text('Refresh'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+---
+
+// lib/presentation/widgets/error_widget.dart
+import 'package:flutter/material.dart';
+
+class ErrorWidget extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const ErrorWidget({
+    Key? key,
+    required this.message,
+    required this.onRetry,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 64,
+              color: Colors.red[400],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Oops! Something went wrong',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+---
+
+// lib/presentation/pages/article_detail/article_detail_page.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
+import '../../data/models/article_model.dart';
+import '../controllers/news_controller.dart';
+import 'package:timeago/timeago.dart' as timeago;
+
+class ArticleDetailPage extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final Article article = Get.arguments as Article;
+    final NewsController newsController = Get.find<NewsController>();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Article'),
+        actions: [
+          Obx(() => IconButton(
+            icon: Icon(
+              newsController.isBookmarked(article) 
+                  ? Icons.bookmark
+                  : Icons.bookmark_border,
+            ),
+            onPressed: () => newsController.toggleBookmark(article),
+          )),
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: () => _shareArticle(article),
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (article.urlToImage != null && article.urlToImage!.isNotEmpty)
+              CachedNetworkImage(
+                imageUrl: article.urlToImage!,
+                height: 250,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  height: 250,
+                  color: Colors.grey[300],
+                  child: const Center(child: CircularProgressIndicator()),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  height: 250,
+                  color: Colors.grey[300],
+                  child: const Icon(Icons.error, size: 50),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    article.title ?? 'No Title',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      if (article.source?.name != null) ...[
+                        Icon(
+                          Icons.source,
+                          size: 16,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          article.source!.name!,
+                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Theme.of(context).primaryColor,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 16),
+                      if (article.publishedAt != null) ...[
+                        Icon(
+                          Icons.access_time,
+                          size: 16,
+                          color: Colors.grey[600],
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          timeago.format(article.publishedAt!),
+                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  if (article.description != null) ...[
+                    Text(
+                      article.description!,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w500,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  if (article.content != null) ...[
+                    Text(
+                      article.content!,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        height: 1.6,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                  if (article.url != null)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => _launchUrl(article.url!),
+                        icon: const Icon(Icons.open_in_new),
+                        label: const Text('Read Full Article'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _shareArticle(Article article) {
+    final text = '${article.title}\n\n${article.url ?? ''}';
+    Share.share(text);
+  }
+
+  void _launchUrl(String url) async {
+    final Uri uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      Get.snackbar('Error', 'Could not launch URL');
+    }
+  }
+}
+
+---
+
+// lib/presentation/pages/search/search_page.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import '../../controllers/news_controller.dart';
+import '../../widgets/article_card.dart';
+import '../../widgets/loading_shimmer.dart';
+import '../../widgets/empty_state_widget.dart';
+import '../../routes/app_routes.dart';
+
+class SearchPage extends GetView<NewsController> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: TextField(
+          controller: controller.searchController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Search news...',
+            border: InputBorder.none,
+          ),
+          onSubmitted: controller.searchArticles,
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.clear),
+            onPressed: () {
+              controller.searchController.clear();
+              Get.back();
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Search History
+          Obx(() {
+            if (controller.searchHistory.isEmpty) return const SizedBox();
+            
+            return Container(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Recent Searches',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: controller.clearSearchHistory,
+                        child: const Text('Clear'),
+                      ),
+                    ],
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    children: controller.searchHistory.map((query) {
+                      return ActionChip(
+                        label: Text(query),
+                        onPressed: () {
+                          controller.searchController.text = query;
+                          controller.searchArticles(query);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            );
+          }),
+          
+          // Search Results
+          Expanded(
+            child: Obx(() {
+              if (controller.isLoading.value) {
+                return LoadingShimmer();
+              }
+              
+              if (controller.filteredArticles.isEmpty) {
+                return EmptyStateWidget(
+                  message: 'No articles found for your search',
+                );
+              }
+              
+              return ListView.builder(
+                itemCount: controller.filteredArticles.length,
+                itemBuilder: (context, index) {
+                  return ArticleCard(
+                    article: controller.filteredArticles[index],
+                    onTap: () => Get.toNamed(
+                      AppRoutes.ARTICLE_DETAIL,
+                      arguments: controller.filteredArticles[index],
+                    ),
+                  );
+                },
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+---
+
+// lib/presentation/pages/bookmarks/bookmarks_page.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import '../../controllers/news_controller.dart';
+import '../../widgets/article_card.dart';
+import '../../widgets/empty_state_widget.dart';
+import '../../routes/app_routes.dart';
+
+class BookmarksPage extends GetView<NewsController> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Bookmarks'),
+      ),
+      body: Obx(() {
+        if (controller.bookmarkedArticles.isEmpty) {
+          return const EmptyStateWidget(
+            message: 'No bookmarked articles yet',
+          );
+        }
+        
+        return ListView.builder(
+          itemCount: controller.bookmarkedArticles.length,
+          itemBuilder: (context, index) {
+            return ArticleCard(
+              article: controller.bookmarkedArticles[index],
+              onTap: () => Get.toNamed(
+                AppRoutes.ARTICLE_DETAIL,
+                arguments: controller.bookmarkedArticles[index],
+              ),
+            );
+          },
+        );
+      }),
+    );
+  }
+}
+
+---
+
+// lib/core/bindings/initial_binding.dart
+import 'package:get/get.dart';
+import '../services/storage_service.dart';
+import '../services/network_service.dart';
+
+class InitialBinding extends Bindings {
+  @override
+  void dependencies() {
+    Get.put(StorageService(), permanent: true);
+    Get.put(NetworkService(), permanent: true);
+  }
+}
+
+---
+
+// test/unit_tests/news_controller_test.dart
+import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:mockito/mockito.dart';
+import 'package:mockito/annotations.dart';
+import 'package:news_feed_app/data/repositories/news_repository.dart';
+import 'package:news_feed_app/presentation/controllers/news_controller.dart';
+import 'package:news_feed_app/data/models/article_model.dart';
+
+@GenerateMocks([NewsRepository])
+import 'news_controller_test.mocks.dart';
+
+void main() {
+  late NewsController newsController;
+  late MockNewsRepository mockRepository;
+
+  setUp(() {
+    mockRepository = MockNewsRepository();
+    newsController = NewsController();
+    // Inject mock repository
+    Get.testMode = true;
+  });
+
+  tearDown(() {
+    Get.reset();
+  });
+
+  group('NewsController Tests', () {
+    test('should load articles successfully', () async {
+      // Arrange
+      final articles = [
+        Article(
+          title: 'Test Article',
+          description: 'Test Description',
+          url: 'https://example.com',
+        ),
+      ];
+      when(mockRepository.getArticles(query: anyNamed('query'), page: anyNamed('page')))
+          .thenAnswer((_) async => articles);
+
+      // Act
+      await newsController.loadArticles();
+
+      // Assert
+      expect(newsController.articles.length, equals(1));
+      expect(newsController.hasError.value, isFalse);
+      expect(newsController.isLoading.value, isFalse);
+    });
+
+    test('should handle search functionality', () {
+      // Arrange
+      const searchQuery = 'flutter';
+
+      // Act
+      newsController.searchArticles(searchQuery);
+
+      // Assert
+      expect(newsController.searchQuery.value, equals(searchQuery));
+      expect(newsController.searchHistory.contains(searchQuery), isTrue);
+    });
+
+    test('should toggle bookmark correctly', () {
+      // Arrange
+      final article = Article(
+        title: 'Test Article',
+        url: 'https://example.com',
+      );
+
+      // Act
+      newsController.toggleBookmark(article);
+
+      // Assert
+      expect(newsController.isBookmarked(article), isTrue);
+      expect(newsController.bookmarkedArticles.length, equals(1));
+
+      // Act again to remove bookmark
+      newsController.toggleBookmark(article);
+
+      // Assert
+      expect(newsController.isBookmarked(article), isFalse);
+      expect(newsController.bookmarkedArticles.length, equals(0));
+    });
+  });
+}
+
+---
+
+// test/widget_tests/article_card_test.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:news_feed_app/data/models/article_model.dart';
+import 'package:news_feed_app/presentation/widgets/article_card.dart';
+import 'package:news_feed_app/presentation/controllers/news_controller.dart';
+
+void main() {
+  late NewsController newsController;
+
+  setUp(() {
+    Get.testMode = true;
+    newsController = NewsController();
+    Get.put(newsController);
+  });
+
+  tearDown(() {
+    Get.reset();
+  });
+
+  group('ArticleCard Widget Tests', () {
+    testWidgets('should display article information correctly', (tester) async {
+      // Arrange
+      final article = Article(
+        title: 'Test Article Title',
+        description: 'Test article description',
+        source: Source(name: 'Test Source'),
+        publishedAt: DateTime.now(),
+      );
+
+      // Act
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ArticleCard(
+              article: article,
+              onTap: () {},
+            ),
+          ),
+        ),
+      );
+
+      // Assert
+      expect(find.text('Test Article Title'), findsOneWidget);
+      expect(find.text('Test article description'), findsOneWidget);
+      expect(find.text('Test Source'), findsOneWidget);
+    });
+
+    testWidgets('should handle tap events', (tester) async {
+      // Arrange
+      bool tapped = false;
+      final article = Article(title: 'Test Article');
+
+      // Act
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ArticleCard(
+              article: article,
+              onTap: () => tapped = true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(InkWell));
+      await tester.pumpAndSettle();
+
+      // Assert
+      expect(tapped, isTrue);
+    });
+  });
+}
+
+---
+
+// README.md
+# News Feed App
+
+A production-ready news feed mobile application built with Flutter that demonstrates modern mobile development practices including state management, API integration, performance optimization, and user experience design.
+
+## Features
+
+### Core Features
+- **News Feed List View**: Display articles with thumbnails, titles, sources, and publish dates
+- **Infinite Scrolling**: Load more articles automatically as user scrolls
+- **Pull-to-Refresh**: Refresh articles with pull gesture
+- **Search Functionality**: Search articles with debounced queries and search history
+- **Bookmarks**: Save and manage favorite articles locally
+- **Offline Support**: Cache articles for offline viewing
+- **Article Details**: Full article view with sharing capabilities
+- **Dark/Light Theme**: Automatic theme switching based on system preferences
+
+### Technical Implementation
+- **State Management**: GetX for reactive state management and dependency injection
+- **Networking**: Dio for HTTP requests with proper error handling and retry logic
+- **Local Storage**: Get Storage for caching and user preferences
+- **Performance**: Image caching, lazy loading, and memory optimization
+- **UI/UX**: Material Design 3, smooth animations, and responsive design
+
+## Architecture
+
+The app follows clean architecture principles with separation of concerns:
+
+```
+lib/
+├── core/
+│   ├── constants/         # App constants and strings
+│   ├── services/          # Core services (Network, Storage)
+│   ├── theme/            # App theming
+│   ├── exceptions/       # Custom exception classes
+│   └── bindings/         # Dependency injection
+├── data/
+│   ├── models/           # Data models
+│   └── repositories/     # Data repositories
+├── presentation/
+│   ├── controllers/      # GetX controllers
+│   ├── pages/           # UI pages
+│   ├── widgets/         # Reusable widgets
+│   └── routes/          # App routing
+└── main.dart
+```
+
+## Setup Instructions
+
+### Prerequisites
+- Flutter SDK (latest stable version)
+- Dart SDK
+- Android Studio / VS Code
+- NewsAPI key from [newsapi.org](https://newsapi.org/)
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd news_feed_app
+   ```
+
+2. **Install dependencies**
+   ```bash
+   flutter pub get
+   ```
+
+3. **Configure API Key**
+   - Get a free API key from [NewsAPI](https://newsapi.org/)
+   - Replace `YOUR_API_KEY` in `lib/core/constants/app_constants.dart`
+
+4. **Run the app**
+   ```bash
+   flutter run
+   ```
+
+### Testing
+
+Run unit tests:
+```bash
+flutter test
+```
+
+Run widget tests:
+```bash
+flutter test test/widget_tests/
+```
+
+## Key Dependencies
+
+- **get**: State management, routing, and dependency injection
+- **dio**: HTTP client for API requests
+- **get_storage**: Local data persistence
+- **cached_network_image**: Image caching and loading
+- **shimmer**: Loading animations
+- **connectivity_plus**: Network connectivity detection
+- **share_plus**: Article sharing functionality
+- **url_launcher**: Launch external URLs
+- **flutter_staggered_animations**: List animations
+
+## API Integration
+
+The app uses NewsAPI.org for fetching articles:
+- **Endpoint**: `https://newsapi.org/v2/everything`
+- **Parameters**: 
+  - `q`: Search query (default: "flutter")
+  - `sortBy`: "publishedAt"
+  - `pageSize`: 20
+  - `page`: Page number for pagination
+
+## Performance Optimizations
+
+- **Image Caching**: Automatic image caching with `cached_network_image`
+- **List Performance**: Optimized ListView with proper itemBuilder
+- **Memory Management**: Proper disposal of controllers and listeners
+- **Network Optimization**: Request cancellation and retry mechanisms
+- **Lazy Loading**: Load content only when needed
+
+## Error Handling
+
+- Network errors with retry options
+- Graceful offline mode fallback
+- User-friendly error messages
+- Global error handling with GetX
+
+## Future Enhancements
+
+- Push notifications for breaking news
+- User authentication and personalization
+- Advanced filtering and sorting options
+- Article categories and sources management
+- Reading progress tracking
+- Text-to-speech functionality
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new features
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.,
+                      children: [
+                        if (article.source?.name != null)
+                          Text(
+                            article.source!.name!,
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: Theme.of(context).primaryColor,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        if (article.publishedAt != null)
+                          Text(
+                            timeago.format(article.publishedAt!),
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Obx(() => IconButton(
+                    icon: Icon(
+                      newsController.isBookmarked(article) 
+                          ? Icons.bookmark
+                          : Icons.bookmark_border,
+                      color: newsController.isBookmarked(article)
+                          ? Theme.of(context).primaryColor
+                          : Colors.grey,
+                    ),
+                    onPressed: () => newsController.toggleBookmark(article),
+                  )),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+---
+
+// lib/presentation/widgets/search_bar_widget.dart
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import '../controllers/news_controller.dart';
+
+class SearchBarWidget extends GetView<NewsController> {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: TextField(
+        controller: controller.searchController,
+        decoration: InputDecoration(
+          hintText: 'Search news...',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: Obx(() => controller.searchQuery.value.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: controller.clearSearch,
+                )
+              : const SizedBox()),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(25),
+          ),
+        ),
+        onSubmitted: controller.searchArticles,
+      ),
+    );
+  }
+}
+
+---
+
+// lib/presentation/widgets/loading_shimmer.dart
+import 'package:flutter/material.dart';
+import 'package:shimmer/shimmer.dart';
+
+class LoadingShimmer extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      itemCount: 5,
+      itemBuilder: (context, index) {
+        return Shimmer.fromColors(
+          baseColor: Colors.grey[300]!,
+          highlightColor: Colors.grey[100]!,
+          child: Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start
